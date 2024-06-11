@@ -1,0 +1,43 @@
+---
+title: "Binge-eating disorder & binge-eating symptoms"
+author: "Abubakr A"
+date: "2024-01-23"
+output: html_document
+---
+
+#Load packages to R
+```{r}
+library(tidyverse)
+library(readxl)
+library(writexl)
+```
+
+#Transforming variables
+```{r}
+BED$src_subject_id<-as.character(BED$src_subject_id)
+BED$eventname<-as.character(BED$eventname)
+BED$ksads2_13_899_p<- as.numeric(ksads2_13_899_p)
+```
+#Preparing year identifiers for wide format variables
+```{r}
+BED<-BED%>%
+  mutate(events=case_when(eventname=="baseline_year_1_arm_1"~"bl",
+                         eventname=="1_year_follow_up_y_arm_1"~"y1",
+                         eventname=="2_year_follow_up_y_arm_1"~"y2",
+                         eventname=="3_year_follow_up_y_arm_1"~"y3",
+                         eventname=="4_year_follow_up_y_arm_1"~"y4"))
+
+BED$events<-as.character(BED$events)
+```
+
+#Replacing NA with period 
+```{r}
+BED<- BED%>% mutate_if(is.character, ~replace_na(.,))
+```
+
+#Converting the data from long into wide format
+``` {r}
+BED<-reshape(BED, idvar = "src_subject_id", timevar = "events", direction = "wide")
+
+````
+
