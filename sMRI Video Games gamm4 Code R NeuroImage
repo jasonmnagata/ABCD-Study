@@ -1,0 +1,128 @@
+library(gamm4)
+
+#merged_data_4 is the input dataframe with dummy-coded categorical variables
+
+#grab all variable names containing covariates
+keywords <- c("income", "race", "education", "mri_software", "mri_serial", "tanner")
+covariate_cols <- grep(paste0("^(", paste(keywords, collapse = "|"), ")"), names(merged_data_4), value = TRUE)
+main_predictors <- c("average_daily_game_hours","non_game_screen_time", 
+                     "s(age)", "sex2", "partner_binary1", "bmip",
+                     "ab_g_stc__gen_pc__01","ab_g_stc__gen_pc__02", "ab_g_stc__gen_pc__03", 
+                     "ab_g_stc__gen_pc__04","ab_g_stc__gen_pc__05", "ab_g_stc__gen_pc__06", 
+                     "ab_g_stc__gen_pc__07","ab_g_stc__gen_pc__08", "ab_g_stc__gen_pc__09", 
+                     "ab_g_stc__gen_pc__10")
+
+#combine all predictors into the formula
+all_predictors <- c(main_predictors, covariate_cols)
+formula_str_pred <- paste0(" ~ ", paste(all_predictors, collapse = " + "))
+
+##run the GAM models with standardized coefficients
+#select all sMRI columns
+smri_columns <- grep("^mr_y_smri__", names(merged_data_4), value = TRUE)
+
+#create summary table
+results <- data.frame(
+  ROI = character(),
+  Estimate = numeric(),
+  Std_Error = numeric(),
+  t_value = numeric(),
+  p_value = numeric(),
+  measure_type = character(),
+  Std_Estimate = numeric(),
+  stringsAsFactors = FALSE
+)
+
+#compute SD of game hours to standardize coefficients later
+sd_predictor <- sd(merged_data_4$average_daily_game_hours, na.rm = TRUE)
+
+#assign measure types for FDR correction
+for (roi in smri_columns) {
+  cat("Fitting model for:", roi, "\n")
+  if (roi %in% other_rois) {
+    measure_type <- "other"
+  } else if (grepl("thk__dsk", roi)) {
+    measure_type <- "thickness_dsk"
+  } else if (grepl("thk__dst", roi)) {
+    measure_type <- "thickness_dst"
+  } else if (grepl("area__dsk", roi)) {
+    measure_type <- "area_dsk"
+  } else if (grepl("area__dst", roi)) {
+    measure_type <- "area_dst"
+  } else if (grepl("vol__dsk", roi)) {
+    measure_type <- "volume_dsk"
+  } else if (grepl("vol__dst", roi)) {
+    measure_type <- "volume_dst"
+  } else if (grepl("vol__aseg", roi)) {
+    measure_type <- "volume_subcortical"
+  } else {
+    measure_type <- "other"
+  }
+  
+  #make model string
+  formula_str <- paste0(roi, formula_str_pred)
+  
+  #gamm4 model
+  model <- tryCatch(
+    gamm4(
+      formula = as.formula(formula_str),
+      random = ~(1 | ab_g_stc__design_id__fam),
+      data = merged_data_4
+    ),
+    error = function(e) {
+      message("Error fitting model for ", roi, ": ", e$message)
+      return(NULL)
+    }
+  )
+  
+  if (!is.null(model)) {
+    summary_gam <- summary(model$gam)
+    
+    if ("average_daily_game_hours" %in% rownames(summary_gam$p.table)) {
+      coef_info <- summary_gam$p.table["average_daily_game_hours", ]
+      
+      #standardize coefficients
+      sd_response <- sd(merged_data_4[[roi]], na.rm = TRUE)
+      std_estimate <- coef_info["Estimate"] * (sd_predictor / sd_response)
+      std_error <- coef_info["Std. Error"] * (sd_predictor / sd_response)
+      
+      #add results to summary table
+      results <- rbind(results, data.frame(
+        ROI = roi,
+        Estimate = coef_info["Estimate"],
+        Std_Error = coef_info["Std. Error"],
+        t_value = coef_info["t value"],
+        p_value = coef_info["Pr(>|t|)"],
+        measure_type = measure_type,
+        Std_Estimate = std_estimate,
+        Std_Error_Standardized = std_error,  # new line
+        stringsAsFactors = FALSE
+      ))
+    } else {
+      
+      #catch any model errors
+      message("average_daily_game_hours not found in model for ", roi)
+    }
+  }
+}
+
+#save results without FDR correction
+write.csv(results, "results_time_y4_raw.csv", row.names = FALSE)
+
+##apply FDR correction
+#split results by measure_type
+results_split <- split(results, results$measure_type)
+
+#apply FDR within each measure_type, except for "other"
+results_split <- lapply(results_split, function(df) {
+  if (unique(df$measure_type) == "other") {
+    df$p_adj <- df$p_value
+  } else {
+    df$p_adj <- p.adjust(df$p_value, method = "fdr")
+  }
+  return(df)
+})
+results_fdr <- do.call(rbind, results_split)
+rownames(results_fdr) <- NULL
+write.csv(results_fdr, "results_time_y4_fdr.csv", row.names = FALSE)
+
+
